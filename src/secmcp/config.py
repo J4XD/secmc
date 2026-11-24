@@ -1,11 +1,14 @@
 """Configuration loaded from scope.yaml."""
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from secmcp.scope import Scope, parse_entry
+
+ToolName = Literal["nmap", "httpx", "ffuf", "nuclei"]
 
 
 class ConfigError(Exception):
@@ -16,6 +19,19 @@ class Timeouts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nmap: int = Field(default=900, ge=1, le=86_400)
+    httpx: int = Field(default=600, ge=1, le=86_400)
+    ffuf: int = Field(default=1800, ge=1, le=86_400)
+    nuclei: int = Field(default=3600, ge=1, le=86_400)
+
+
+class RateLimits(BaseModel):
+    """Maximum requests per second; a call may ask for less."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    httpx: int = Field(default=50, ge=1, le=10_000)
+    ffuf: int = Field(default=50, ge=1, le=10_000)
+    nuclei: int = Field(default=50, ge=1, le=10_000)
 
 
 class Config(BaseModel):
@@ -27,8 +43,11 @@ class Config(BaseModel):
     max_concurrency: int = Field(default=2, ge=1, le=16)
     max_output_bytes: int = Field(default=20_000, ge=1_000, le=10_000_000)
     timeouts: Timeouts = Timeouts()
+    rate_limits: RateLimits = RateLimits()
     data_dir: Path = Path("~/.local/share/secmcp")
     nmap_script_db: Path | None = None
+    wordlist_dirs: list[Path] = []
+    binaries: dict[ToolName, Path] = {}
 
     @field_validator("allow", "exclude")
     @classmethod
@@ -41,6 +60,16 @@ class Config(BaseModel):
     @classmethod
     def _expand_user(cls, path: Path | None) -> Path | None:
         return path.expanduser() if path else None
+
+    @field_validator("wordlist_dirs")
+    @classmethod
+    def _expand_dirs(cls, paths: list[Path]) -> list[Path]:
+        return [path.expanduser() for path in paths]
+
+    @field_validator("binaries")
+    @classmethod
+    def _expand_binaries(cls, paths: dict[ToolName, Path]) -> dict[ToolName, Path]:
+        return {tool: path.expanduser() for tool, path in paths.items()}
 
     def scope(self) -> Scope:
         return Scope(
@@ -72,7 +101,11 @@ def load_config(path: Path) -> Config:
     except ValidationError as exc:
         raise ConfigError(f"{path}: {exc}") from None
     base = path.parent.resolve()
-    updates: dict[str, Path] = {"data_dir": base / config.data_dir}
+    updates: dict[str, object] = {
+        "data_dir": base / config.data_dir,
+        "wordlist_dirs": [base / directory for directory in config.wordlist_dirs],
+        "binaries": {tool: base / binary for tool, binary in config.binaries.items()},
+    }
     if config.nmap_script_db:
         updates["nmap_script_db"] = base / config.nmap_script_db
     return config.model_copy(update=updates)
