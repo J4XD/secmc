@@ -44,7 +44,7 @@ class Config(BaseModel):
     max_output_bytes: int = Field(default=20_000, ge=1_000, le=10_000_000)
     timeouts: Timeouts = Timeouts()
     rate_limits: RateLimits = RateLimits()
-    data_dir: Path = Path("~/.local/share/secmcp")
+    data_dir: Path = Field(default=Path("~/.local/share/secmcp"), validate_default=True)
     nmap_script_db: Path | None = None
     wordlist_dirs: list[Path] = []
     binaries: dict[ToolName, Path] = {}
