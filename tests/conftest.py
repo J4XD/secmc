@@ -47,12 +47,3 @@ def config(tmp_path: Path) -> Config:
 @pytest.fixture
 def scope(config: Config) -> Scope:
     return config.scope()
-
-
-def fake_resolver(table: dict[str, list[str]]) -> Any:
-    def resolve(host: str) -> list[str]:
-        if host not in table:
-            raise socket.gaierror(socket.EAI_NONAME, "not found")
-        return table[host]
-
-    return resolve

@@ -3,7 +3,7 @@ import socket
 import pytest
 
 from secmcp.scope import Scope, check_target, parse_entry, resolve_host
-from tests.conftest import fake_resolver
+from tests.helpers import fake_resolver
 
 NO_DNS = fake_resolver({})
 
