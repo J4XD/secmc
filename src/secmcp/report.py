@@ -15,24 +15,17 @@ from pydantic import BaseModel
 
 from secmcp.audit import AuditRecord, append_record, iter_records
 from secmcp.config import Config
-from secmcp.parsers.ffuf_json import FfufParseError, parse_ffuf_json
-from secmcp.parsers.httpx_json import HttpxParseError, parse_httpx_jsonl
-from secmcp.parsers.nmap_xml import NmapParseError, parse_nmap_xml
-from secmcp.parsers.nuclei_jsonl import (
-    SEVERITY_ORDER,
-    NucleiParseError,
-    Severity,
-    parse_nuclei_jsonl,
-)
+from secmcp.parsers.ffuf_json import parse_ffuf_json
+from secmcp.parsers.httpx_json import parse_httpx_jsonl
+from secmcp.parsers.nmap_xml import parse_nmap_xml
+from secmcp.parsers.nuclei_jsonl import SEVERITY_ORDER, Severity, parse_nuclei_jsonl
+from secmcp.tools import PLUGINS
 
 # Each tool saves its parsed output next to the raw log, under the same run id.
-OUTPUT_SUFFIXES = {
-    "nmap": ".xml",
-    "httpx": ".jsonl",
-    "ffuf": ".json",
-    "nuclei": ".jsonl",
+OUTPUT_SUFFIXES: dict[str, str] = {
+    plugin.name: plugin.output_suffix for plugin in PLUGINS
 }
-PARSE_ERRORS = (NmapParseError, HttpxParseError, FfufParseError, NucleiParseError)
+PARSE_ERRORS = tuple(plugin.parse_error for plugin in PLUGINS)
 MAX_VALUE = 300
 _LABEL = r"[a-z0-9_][a-z0-9_-]{0,62}"
 _DOMAIN = re.compile(rf"(\*\.)?{_LABEL}(\.{_LABEL})*\.?")

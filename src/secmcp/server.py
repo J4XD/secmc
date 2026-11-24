@@ -3,10 +3,9 @@
 import argparse
 import os
 import sys
-from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -16,50 +15,19 @@ from pydantic import BaseModel, Field
 
 from secmcp import __version__
 from secmcp.audit import AuditRecord, append_record, read_records
-from secmcp.config import ConfigError, load_config
+from secmcp.config import Config, ConfigError, load_config
 from secmcp.context import ToolContext
-from secmcp.parsers.nuclei_jsonl import Severity
 from secmcp.report import ReportError, ReportResult, build_report, write_report
 from secmcp.scope import check_target
-from secmcp.targets import MAX_TARGETS, UrlDecision, check_url
-from secmcp.tools import ffuf, httpx, nmap, nuclei
+from secmcp.targets import UrlDecision, check_url
+from secmcp.tools import PLUGINS
+from secmcp.tools.common import ToolStatus, tool_status
 
 INSTRUCTIONS = """\
 secmcp runs security tools against targets that are in the operator's scope file.
 Call check_scope before scanning a new target. Use dry_run=true to preview a command.
 Show any needs_approval result to the human; only they can approve it.
 """
-
-DryRun = Annotated[
-    bool, Field(description="return the exact command without running it")
-]
-Confirm = Annotated[
-    bool,
-    Field(description="set only after a human approved a needs_approval result"),
-]
-RateLimit = Annotated[
-    int | None,
-    Field(
-        ge=1,
-        description="requests per second, at most the cap in scope.yaml "
-        "(default: the cap)",
-    ),
-]
-WebTargets = Annotated[
-    list[str],
-    Field(
-        min_length=1,
-        max_length=MAX_TARGETS,
-        description="urls (http or https) or host[:port] values, all in scope",
-    ),
-]
-
-
-def _extra_args(allowed: Mapping[str, object], tool: str) -> Any:
-    return Field(
-        description=f"extra {tool} flags, one list item per token. Allowed: "
-        + " ".join(sorted(allowed))
-    )
 
 
 def scope_check(target: str, ctx: ToolContext) -> UrlDecision:
@@ -72,6 +40,10 @@ def scope_check(target: str, ctx: ToolContext) -> UrlDecision:
 
 class AuditLogResult(BaseModel):
     records: list[AuditRecord]
+
+
+class ToolsResult(BaseModel):
+    tools: list[ToolStatus]
 
 
 def build_server(ctx: ToolContext) -> MCPServer:
@@ -99,135 +71,16 @@ def build_server(ctx: ToolContext) -> MCPServer:
         )
         return decision
 
-    @server.tool(
-        annotations=ToolAnnotations(
-            read_only_hint=False, destructive_hint=False, open_world_hint=True
-        )
-    )
-    async def run_nmap(
-        target: Annotated[
-            str, Field(description="IP address, CIDR or hostname in scope")
-        ],
-        scan_type: Annotated[
-            nmap.ScanType,
-            Field(
-                description="quick: top 100 ports, top_ports: top 1000 ports, "
-                "service_version: top 1000 ports with version detection"
-            ),
-        ] = "quick",
-        ports: Annotated[
-            str | None,
-            Field(
-                description="ports to scan instead of the scan type's set, "
-                "e.g. 22,80,8000-8100"
-            ),
-        ] = None,
-        extra_args: Annotated[
-            list[str] | None, _extra_args(nmap.ALLOWED_FLAGS, "nmap")
-        ] = None,
-        dry_run: DryRun = False,
-        confirm: Confirm = False,
-    ) -> nmap.NmapResult:
-        """Run an nmap scan after scope and flag checks and return parsed results."""
-        return await nmap.run_nmap(
-            ctx, target, scan_type, ports, extra_args, dry_run, confirm
-        )
+    for plugin in PLUGINS:
+        plugin.register(server, ctx)
 
     @server.tool(
-        annotations=ToolAnnotations(
-            read_only_hint=False, destructive_hint=False, open_world_hint=True
-        )
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False)
     )
-    async def run_httpx(
-        targets: WebTargets,
-        rate_limit: RateLimit = None,
-        extra_args: Annotated[
-            list[str] | None, _extra_args(httpx.ALLOWED_FLAGS, "httpx")
-        ] = None,
-        dry_run: DryRun = False,
-        confirm: Confirm = False,
-    ) -> httpx.HttpxResult:
-        """Probe web servers with httpx: status, title, server, tech and ip."""
-        return await httpx.run_httpx(
-            ctx, targets, rate_limit, extra_args, dry_run, confirm
-        )
-
-    @server.tool(
-        annotations=ToolAnnotations(
-            read_only_hint=False, destructive_hint=False, open_world_hint=True
-        )
-    )
-    async def run_ffuf(
-        url: Annotated[
-            str,
-            Field(
-                description="http(s) url in scope with FUZZ in the path or query, "
-                "e.g. https://app.example.com/FUZZ"
-            ),
-        ],
-        wordlist: Annotated[
-            str,
-            Field(
-                description="wordlist file name or path inside a wordlist_dirs "
-                "directory from scope.yaml"
-            ),
-        ],
-        rate_limit: RateLimit = None,
-        extra_args: Annotated[
-            list[str] | None, _extra_args(ffuf.ALLOWED_FLAGS, "ffuf")
-        ] = None,
-        dry_run: DryRun = False,
-        confirm: Confirm = False,
-    ) -> ffuf.FfufResult:
-        """Discover content with ffuf using an allowlisted wordlist."""
-        return await ffuf.run_ffuf(
-            ctx, url, wordlist, rate_limit, extra_args, dry_run, confirm
-        )
-
-    @server.tool(
-        annotations=ToolAnnotations(
-            read_only_hint=False, destructive_hint=False, open_world_hint=True
-        )
-    )
-    async def run_nuclei(
-        targets: WebTargets,
-        severity: Annotated[
-            list[Severity] | None,
-            Field(description="only run templates with these severities"),
-        ] = None,
-        tags: Annotated[
-            list[str] | None,
-            Field(
-                description="only run templates with these tags. Tags that need "
-                "approval: " + " ".join(nuclei.DANGEROUS_TAGS)
-            ),
-        ] = None,
-        exclude_tags: Annotated[
-            list[str] | None, Field(description="skip templates with these tags")
-        ] = None,
-        template_ids: Annotated[
-            list[str] | None,
-            Field(description="only run these template ids, e.g. CVE-2021-44228"),
-        ] = None,
-        rate_limit: RateLimit = None,
-        extra_args: Annotated[
-            list[str] | None, _extra_args(nuclei.ALLOWED_FLAGS, "nuclei")
-        ] = None,
-        dry_run: DryRun = False,
-        confirm: Confirm = False,
-    ) -> nuclei.NucleiResult:
-        """Run nuclei templates; intrusive tags are excluded unless approved."""
-        return await nuclei.run_nuclei(
-            ctx,
-            targets,
-            severity,
-            tags,
-            exclude_tags,
-            template_ids,
-            rate_limit,
-            extra_args,
-            dry_run,
-            confirm,
+    def check_tools() -> ToolsResult:
+        """List the wrapped tools, whether each is installed, and its flag policy."""
+        return ToolsResult(
+            tools=[tool_status(ctx.config, plugin) for plugin in PLUGINS]
         )
 
     @server.tool(
@@ -309,16 +162,34 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument(
         "-o", "--output", type=Path, help="write the draft here instead of stdout"
     )
+    check = commands.add_parser(
+        "check", help="show which tool binaries are installed; exit 1 if any is missing"
+    )
+    check.add_argument("--scope", type=Path, default=argparse.SUPPRESS, help=scope_help)
     return parser
 
 
+def check_binaries(config: Config) -> bool:
+    """Print one line per tool; True if every binary was found."""
+    statuses = [tool_status(config, plugin) for plugin in PLUGINS]
+    width = max(len(status.name) for status in statuses)
+    for status in statuses:
+        detail = (
+            status.binary if status.installed else f"missing: {status.install_hint}"
+        )
+        print(f"{status.name:<{width}}  {detail}")
+    return all(status.installed for status in statuses)
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Serve over stdio, or print a report draft with the report command."""
+    """Serve over stdio, or run the report or check command."""
     args = _parser().parse_args(argv)
     try:
         config = load_config(args.scope)
     except ConfigError as exc:
         sys.exit(f"secmcp: {exc}")
+    if args.command == "check":
+        sys.exit(0 if check_binaries(config) else 1)
     if args.command != "report":
         build_server(ToolContext.from_config(config)).run("stdio")
         return

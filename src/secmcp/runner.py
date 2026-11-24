@@ -9,19 +9,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-INSTALL_HINTS = {
-    "nmap": "install nmap (apt install nmap, brew install nmap) "
-    "or get it from https://nmap.org/download",
-    "httpx": "install projectdiscovery httpx "
-    "(go install github.com/projectdiscovery/httpx/cmd/httpx@latest); "
-    "the python httpx cli is a different tool, set binaries.httpx if both exist",
-    "ffuf": "install ffuf (apt install ffuf, brew install ffuf, "
-    "or go install github.com/ffuf/ffuf/v2@latest)",
-    "nuclei": "install nuclei "
-    "(go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest) "
-    "and run nuclei -update-templates once",
-}
-
 
 @dataclass(frozen=True)
 class RunResult:
@@ -37,10 +24,6 @@ class RunResult:
 def find_binary(name: str) -> str | None:
     """Return the full path of an executable name or path, or None."""
     return shutil.which(name)
-
-
-def install_hint(name: str) -> str:
-    return INSTALL_HINTS.get(name, f"install {name} and make sure it is on PATH")
 
 
 def read_capped(path: Path, limit: int) -> tuple[str, bool]:

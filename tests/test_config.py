@@ -15,6 +15,12 @@ def test_load_config_resolves_relative_paths(tmp_path: Path) -> None:
     assert not config.allow_dangerous
 
 
+def test_default_data_dir_is_in_home(tmp_path: Path) -> None:
+    path = tmp_path / "scope.yaml"
+    path.write_text("allow: [example.com]\n")
+    assert load_config(path).data_dir == Path.home() / ".local/share/secmcp"
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [

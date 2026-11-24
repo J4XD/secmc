@@ -36,6 +36,7 @@ async def test_tools_are_listed_with_schemas(config: Config) -> None:
         "run_ffuf",
         "run_nuclei",
         "check_scope",
+        "check_tools",
         "get_audit_log",
         "generate_report",
     }
@@ -211,3 +212,38 @@ def test_report_command_errors(
     with pytest.raises(SystemExit) as exc:
         server.main(["report", "--scope", scope, *args])
     assert message in str(exc.value) + capsys.readouterr().err
+
+
+async def test_check_tools_over_mcp(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        common, "find_binary", lambda name: None if name == "ffuf" else f"/bin/{name}"
+    )
+    content = await call(config, "check_tools", {})
+    tools = {tool["name"]: tool for tool in content["tools"]}
+    assert list(tools) == ["nmap", "httpx", "ffuf", "nuclei"]
+    assert tools["nmap"]["installed"]
+    assert tools["nmap"]["binary"] == "/bin/nmap"
+    assert tools["nmap"]["install_hint"] is None
+    assert "--script intrusive" in tools["nmap"]["needs_approval"]
+    assert not tools["ffuf"]["installed"]
+    assert "go install" in tools["ffuf"]["install_hint"]
+
+
+def test_check_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scope = str(write_scope(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        server.main(["check", "--scope", scope])
+    assert exc.value.code == 0
+    assert "nuclei  /usr/bin/nmap" in capsys.readouterr().out
+
+    monkeypatch.setattr(common, "find_binary", lambda name: None)
+    with pytest.raises(SystemExit) as exc:
+        server.main(["--scope", scope, "check"])
+    assert exc.value.code == 1
+    assert "nmap    missing: install nmap" in capsys.readouterr().out

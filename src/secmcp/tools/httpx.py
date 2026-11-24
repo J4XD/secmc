@@ -1,8 +1,10 @@
 """httpx wrapper: probes web servers on checked targets."""
 
 from pathlib import Path
+from typing import Annotated
 
 import anyio
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from secmcp.context import ToolContext
@@ -26,9 +28,16 @@ from secmcp.runner import RunResult
 from secmcp.scope import connect_denylist
 from secmcp.targets import UrlDecision, check_urls
 from secmcp.tools.common import (
+    RUNS_TOOL,
+    Confirm,
+    DryRun,
+    Plugin,
+    RateLimit,
     ToolResult,
+    WebTargets,
     audit,
     execute,
+    extra_args_field,
     locate,
     parse_failed,
     pick_rate,
@@ -181,10 +190,42 @@ async def run_httpx(
     list_path = log_path.with_suffix(".targets")
     deny = connect_denylist(ctx.scope)
     result.argv = build_argv(binary or "httpx", list_path, json_path, rate, deny, flags)
-    if not ready_to_run(ctx.config, "httpx", binary, result, dry_run, confirm):
+    if not ready_to_run(ctx.config, PLUGIN, binary, result, dry_run, confirm):
         return audit(ctx, "httpx", target_text, result, dry_run)
     write_targets(list_path, [d.url for d in decisions if d.url])
     run = await execute(ctx, "httpx", result, ctx.config.timeouts.httpx, log_path)
     if run is not None:
         _finish(result, run, json_path)
     return audit(ctx, "httpx", target_text, result, dry_run)
+
+
+def register(server: MCPServer, ctx: ToolContext) -> None:
+    """Add the run_httpx tool to the server."""
+
+    @server.tool(name="run_httpx", annotations=RUNS_TOOL)
+    async def tool(
+        targets: WebTargets,
+        rate_limit: RateLimit = None,
+        extra_args: Annotated[
+            list[str] | None, extra_args_field(ALLOWED_FLAGS, "httpx")
+        ] = None,
+        dry_run: DryRun = False,
+        confirm: Confirm = False,
+    ) -> HttpxResult:
+        """Probe web servers with httpx: status, title, server, tech and ip."""
+        return await run_httpx(ctx, targets, rate_limit, extra_args, dry_run, confirm)
+
+
+PLUGIN = Plugin(
+    name="httpx",
+    summary="web server probing: status, title, server, tech and ip",
+    install_hint="install projectdiscovery httpx "
+    "(go install github.com/projectdiscovery/httpx/cmd/httpx@latest); "
+    "the python httpx cli is a different tool, set binaries.httpx if both exist",
+    allowed_flags=ALLOWED_FLAGS,
+    blocked_flags=BLOCKED_FLAGS,
+    dangerous={},
+    output_suffix=".jsonl",
+    parse_error=HttpxParseError,
+    register=register,
+)

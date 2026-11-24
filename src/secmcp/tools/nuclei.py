@@ -2,8 +2,10 @@
 
 import re
 from pathlib import Path
+from typing import Annotated
 
 import anyio
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from secmcp.context import ToolContext
@@ -26,9 +28,16 @@ from secmcp.runner import RunResult
 from secmcp.scope import Scope, allows_restricted
 from secmcp.targets import UrlDecision, check_urls
 from secmcp.tools.common import (
+    RUNS_TOOL,
+    Confirm,
+    DryRun,
+    Plugin,
+    RateLimit,
     ToolResult,
+    WebTargets,
     audit,
     execute,
+    extra_args_field,
     locate,
     parse_failed,
     pick_rate,
@@ -272,10 +281,71 @@ async def run_nuclei(
         template_ids,
         flags,
     )
-    if not ready_to_run(ctx.config, "nuclei", binary, result, dry_run, confirm):
+    if not ready_to_run(ctx.config, PLUGIN, binary, result, dry_run, confirm):
         return audit(ctx, "nuclei", target_text, result, dry_run)
     write_targets(list_path, [d.url for d in decisions if d.url])
     run = await execute(ctx, "nuclei", result, ctx.config.timeouts.nuclei, log_path)
     if run is not None:
         _finish(result, run, jsonl_path)
     return audit(ctx, "nuclei", target_text, result, dry_run)
+
+
+def register(server: MCPServer, ctx: ToolContext) -> None:
+    """Add the run_nuclei tool to the server."""
+
+    @server.tool(name="run_nuclei", annotations=RUNS_TOOL)
+    async def tool(
+        targets: WebTargets,
+        severity: Annotated[
+            list[Severity] | None,
+            Field(description="only run templates with these severities"),
+        ] = None,
+        tags: Annotated[
+            list[str] | None,
+            Field(
+                description="only run templates with these tags. Tags that need "
+                "approval: " + " ".join(DANGEROUS_TAGS)
+            ),
+        ] = None,
+        exclude_tags: Annotated[
+            list[str] | None, Field(description="skip templates with these tags")
+        ] = None,
+        template_ids: Annotated[
+            list[str] | None,
+            Field(description="only run these template ids, e.g. CVE-2021-44228"),
+        ] = None,
+        rate_limit: RateLimit = None,
+        extra_args: Annotated[
+            list[str] | None, extra_args_field(ALLOWED_FLAGS, "nuclei")
+        ] = None,
+        dry_run: DryRun = False,
+        confirm: Confirm = False,
+    ) -> NucleiResult:
+        """Run nuclei templates; intrusive tags are excluded unless approved."""
+        return await run_nuclei(
+            ctx,
+            targets,
+            severity,
+            tags,
+            exclude_tags,
+            template_ids,
+            rate_limit,
+            extra_args,
+            dry_run,
+            confirm,
+        )
+
+
+PLUGIN = Plugin(
+    name="nuclei",
+    summary="template scans with severity and tag filters",
+    install_hint="install nuclei "
+    "(go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest) "
+    "and run nuclei -update-templates once",
+    allowed_flags=ALLOWED_FLAGS,
+    blocked_flags=BLOCKED_FLAGS,
+    dangerous={f"tag {tag}": reason for tag, reason in DANGEROUS_TAGS.items()},
+    output_suffix=".jsonl",
+    parse_error=NucleiParseError,
+    register=register,
+)

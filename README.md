@@ -41,6 +41,26 @@ The Python `httpx` package also installs an `httpx` command on some systems. If
 that one comes first on PATH, point secmcp at ProjectDiscovery's binary with
 `binaries: {httpx: /path/to/httpx}`.
 
+`secmcp check` lists each tool's binary, or an install hint for the missing ones,
+and exits 1 if any is missing.
+
+### Docker
+
+The image has nmap, httpx, ffuf, nuclei and the nuclei templates preinstalled. It
+runs as an unprivileged user and expects the scope file at `/config/scope.yaml`.
+
+```sh
+docker build -t secmcp .
+docker run --rm -v "$PWD/scope.yaml:/config/scope.yaml:ro" secmcp check
+```
+
+Tool versions are pinned with build arguments (`HTTPX_VERSION`, `NUCLEI_VERSION`,
+`FFUF_VERSION`). Rebuild to update the nuclei templates.
+
+The audit log, raw output and reports go to `/home/secmcp/.local/share/secmcp`, the
+default `data_dir`. Mount a volume there to keep them. Wordlists are not included;
+mount yours read-only at a path listed in `wordlist_dirs`.
+
 ## Configure scope
 
 ```sh
@@ -101,6 +121,25 @@ Claude Desktop and other clients that use an `mcpServers` config:
 
 The scope path can also be set with `SECMCP_SCOPE`.
 
+With Docker, run the image with `-i` so stdio stays open:
+
+```json
+{
+  "mcpServers": {
+    "secmcp": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/path/to/scope.yaml:/config/scope.yaml:ro",
+        "-v", "secmcp-data:/home/secmcp/.local/share/secmcp",
+        "-v", "/usr/share/seclists:/usr/share/seclists:ro",
+        "secmcp"
+      ]
+    }
+  }
+}
+```
+
 ## Example usage
 
 Tools:
@@ -108,6 +147,7 @@ Tools:
 | Tool | Purpose |
 | --- | --- |
 | `check_scope(target)` | Explain whether a target is in scope, without sending it traffic |
+| `check_tools()` | List each tool, whether its binary is installed, its allowed flags and what needs approval |
 | `run_nmap(target, scan_type, ports?, extra_args?, dry_run?, confirm?)` | Run a scan and return parsed results |
 | `run_httpx(targets, rate_limit?, extra_args?, dry_run?, confirm?)` | Probe web servers: status, title, server, tech, ip |
 | `run_ffuf(url, wordlist, rate_limit?, extra_args?, dry_run?, confirm?)` | Content discovery with `FUZZ` in the url path or query |
@@ -264,7 +304,8 @@ Audit log
 - Linux and macOS only, since the runner relies on POSIX process groups.
 - Only the first resolved address of a hostname is scanned (IPv4 preferred), the same
   as nmap's default.
-- `-sS`, `-sU` and `-O` need root. secmcp does not escalate privileges.
+- `-sS`, `-sU` and `-O` need root. secmcp does not escalate privileges, and the
+  Docker image runs as an unprivileged user, so nmap uses connect scans there.
 - Scripts can be named only when nmap's `script.db` is found. Categories work
   without it. Set `nmap_script_db` if it lives somewhere unusual.
 - nmap still does reverse DNS lookups unless you pass `-n`.
@@ -297,6 +338,23 @@ uv run pytest
 
 Tests mock subprocess and DNS and never touch the network. The runner tests start
 local Python processes to check timeouts and process group cleanup.
+
+### Adding a tool
+
+Each tool is one module in `src/secmcp/tools/` that ends with a `PLUGIN`
+declaration: its allowed, blocked and dangerous flags, install hint, output suffix,
+parse error and a `register` function that adds its MCP tool. The parser goes in
+`src/secmcp/parsers/`. To add a tool:
+
+1. Write the parser and the tool module, following `tools/httpx.py`. Build argv as a
+   list, check targets with `scope.py` or `targets.py`, parse extra flags with
+   `policy.parse_args`, and finish every path through `common.audit`.
+2. Add the plugin to `PLUGINS` in `tools/__init__.py`.
+3. Add the name to `ToolName` and a default to `Timeouts` in `config.py` (and to
+   `RateLimits` if it sends requests at a rate).
+4. Add a report section for its findings in `report.py` if it has any.
+
+Tools must not accept a raw command or arbitrary file paths.
 
 ## License
 
