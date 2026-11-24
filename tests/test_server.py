@@ -6,6 +6,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult
 
 from secmcp import server
+from secmcp.audit import read_records
 from secmcp.config import Config
 from secmcp.tools import common
 from tests.helpers import make_ctx
@@ -36,6 +37,7 @@ async def test_tools_are_listed_with_schemas(config: Config) -> None:
         "run_nuclei",
         "check_scope",
         "get_audit_log",
+        "generate_report",
     }
     schema = tools["run_nmap"].input_schema
     assert schema["required"] == ["target"]
@@ -52,6 +54,9 @@ async def test_tools_are_listed_with_schemas(config: Config) -> None:
     assert tools["run_nuclei"].input_schema["required"] == ["targets"]
     assert "intrusive" in str(tools["run_nuclei"].input_schema["properties"]["tags"])
     assert tools["run_ffuf"].input_schema["required"] == ["url", "wordlist"]
+    report = tools["generate_report"].input_schema
+    assert set(report["properties"]) == {"target", "since", "until"}
+    assert "required" not in report
 
 
 async def test_run_nmap_dry_run_over_mcp(config: Config) -> None:
@@ -135,3 +140,74 @@ async def test_audit_log_limit(config: Config) -> None:
 def test_main_exits_on_bad_scope(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="cannot read"):
         server.main(["--scope", str(tmp_path / "missing.yaml")])
+
+
+async def test_generate_report_over_mcp(config: Config) -> None:
+    await call(config, "run_nmap", {"target": "203.0.113.10"})
+    content = await call(
+        config,
+        "generate_report",
+        {"target": "203.0.113.0/24", "since": "2000-01-01T00:00:00"},
+    )
+    assert content["runs"] == 1
+    assert content["findings"] == 3
+    assert "Open port 22/tcp" in content["markdown"]
+    assert Path(content["report_path"]).is_file()
+
+
+async def test_generate_report_rejects_bad_target(config: Config) -> None:
+    ctx, _ = make_ctx(config)
+    with pytest.raises(ToolError, match="invalid target"):
+        await server.build_server(ctx).call_tool(
+            "generate_report", {"target": "https://example.com"}
+        )
+
+
+def write_scope(tmp_path: Path) -> Path:
+    path = tmp_path / "scope.yaml"
+    path.write_text("allow: [example.com]\ndata_dir: data\n")
+    return path
+
+
+def test_report_command_prints_draft(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    server.main(["report", "--scope", str(write_scope(tmp_path))])
+    out = capsys.readouterr().out
+    assert out.startswith("# Security testing report (draft)")
+    assert "No tools were run in this period." in out
+    assert read_records(tmp_path / "data" / "audit.jsonl", 10) == []
+
+
+def test_report_command_writes_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "report.md"
+    scope = str(write_scope(tmp_path))
+    server.main(
+        ["--scope", scope, "report", "--target", "example.com", "-o", str(output)]
+    )
+    assert output.read_text().startswith(
+        "# Security testing report: example.com (draft)"
+    )
+    assert "wrote" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--since", "yesterday"], "invalid time"),
+        (["--target", "a b"], "invalid target"),
+        (["--since", "2026-11-25", "--until", "2026-11-24"], "earlier"),
+    ],
+)
+def test_report_command_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    args: list[str],
+    message: str,
+) -> None:
+    scope = str(write_scope(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        server.main(["report", "--scope", scope, *args])
+    assert message in str(exc.value) + capsys.readouterr().err

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from secmcp.audit import AuditRecord, append_record, read_records
+from secmcp.audit import AuditRecord, append_record, iter_records, read_records
 
 
 def record(n: int) -> AuditRecord:
@@ -53,3 +53,17 @@ def test_read_missing_or_zero(tmp_path: Path) -> None:
     path = tmp_path / "audit.jsonl"
     append_record(path, record(1))
     assert read_records(path, 0) == []
+
+
+def test_iter_records_reads_everything(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    for n in range(3):
+        append_record(path, record(n))
+    with path.open("a") as handle:
+        handle.write("not json\n")
+    assert [r.target for r in iter_records(path)] == [
+        "203.0.113.0",
+        "203.0.113.1",
+        "203.0.113.2",
+    ]
+    assert list(iter_records(tmp_path / "missing.jsonl")) == []

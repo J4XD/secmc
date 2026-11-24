@@ -2,6 +2,7 @@
 
 import os
 from collections import deque
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -35,16 +36,26 @@ def append_record(path: Path, record: AuditRecord) -> None:
         os.close(fd)
 
 
+def _parse(lines: Iterable[str]) -> Iterator[AuditRecord]:
+    for line in lines:
+        try:
+            yield AuditRecord.model_validate_json(line)
+        except ValidationError:
+            continue
+
+
 def read_records(path: Path, limit: int) -> list[AuditRecord]:
     """Return the last limit records, oldest first, skipping unreadable lines."""
     if limit <= 0 or not path.exists():
         return []
     with path.open(encoding="utf-8") as handle:
         lines = deque(handle, maxlen=limit)
-    records = []
-    for line in lines:
-        try:
-            records.append(AuditRecord.model_validate_json(line))
-        except ValidationError:
-            continue
-    return records
+    return list(_parse(lines))
+
+
+def iter_records(path: Path) -> Iterator[AuditRecord]:
+    """Yield every record in the log, oldest first, skipping unreadable lines."""
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as handle:
+        yield from _parse(handle)
