@@ -4,11 +4,13 @@ import argparse
 import os
 import sys
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import anyio
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
@@ -17,6 +19,7 @@ from secmcp.audit import AuditRecord, append_record, read_records
 from secmcp.config import ConfigError, load_config
 from secmcp.context import ToolContext
 from secmcp.parsers.nuclei_jsonl import Severity
+from secmcp.report import ReportError, ReportResult, build_report, write_report
 from secmcp.scope import check_target
 from secmcp.targets import MAX_TARGETS, UrlDecision, check_url
 from secmcp.tools import ffuf, httpx, nmap, nuclei
@@ -238,22 +241,99 @@ def build_server(ctx: ToolContext) -> MCPServer:
         """Return the most recent audit log records, oldest first."""
         return AuditLogResult(records=read_records(ctx.config.audit_log_path, limit))
 
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        )
+    )
+    async def generate_report(
+        target: Annotated[
+            str | None,
+            Field(
+                description="domain (includes subdomains), ip or cidr to report on "
+                "(default: every target)"
+            ),
+        ] = None,
+        since: Annotated[
+            datetime | None,
+            Field(description="include runs at or after this time (UTC if no zone)"),
+        ] = None,
+        until: Annotated[
+            datetime | None,
+            Field(description="include runs before this time (UTC if no zone)"),
+        ] = None,
+    ) -> ReportResult:
+        """Draft a Markdown bug bounty report from the audit log and saved results."""
+        try:
+            return await anyio.to_thread.run_sync(
+                write_report, ctx.config, target, since, until
+            )
+        except ReportError as exc:
+            raise ToolError(str(exc)) from None
+
     return server
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Load the scope file and serve over stdio."""
+def _timestamp(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid time {value!r}, expected ISO 8601 such as 2026-11-24T18:00"
+        ) from None
+
+
+def _parser() -> argparse.ArgumentParser:
+    scope_default = Path(os.environ.get("SECMCP_SCOPE", "scope.yaml"))
+    scope_help = "path to scope.yaml (default: $SECMCP_SCOPE or ./scope.yaml)"
     parser = argparse.ArgumentParser(prog="secmcp", description=__doc__)
-    parser.add_argument(
-        "--scope",
-        type=Path,
-        default=Path(os.environ.get("SECMCP_SCOPE", "scope.yaml")),
-        help="path to scope.yaml (default: $SECMCP_SCOPE or ./scope.yaml)",
-    )
+    parser.add_argument("--scope", type=Path, default=scope_default, help=scope_help)
     parser.add_argument("--version", action="version", version=f"secmcp {__version__}")
-    args = parser.parse_args(argv)
+    commands = parser.add_subparsers(dest="command", metavar="command")
+    report = commands.add_parser(
+        "report", help="print a Markdown report draft built from the audit log"
+    )
+    # SUPPRESS keeps the subcommand from overwriting a --scope given before it.
+    report.add_argument(
+        "--scope", type=Path, default=argparse.SUPPRESS, help=scope_help
+    )
+    report.add_argument(
+        "--target", help="domain (includes subdomains), ip or cidr to report on"
+    )
+    report.add_argument(
+        "--since", type=_timestamp, help="include runs at or after this time"
+    )
+    report.add_argument(
+        "--until", type=_timestamp, help="include runs before this time"
+    )
+    report.add_argument(
+        "-o", "--output", type=Path, help="write the draft here instead of stdout"
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Serve over stdio, or print a report draft with the report command."""
+    args = _parser().parse_args(argv)
     try:
         config = load_config(args.scope)
     except ConfigError as exc:
         sys.exit(f"secmcp: {exc}")
-    build_server(ToolContext.from_config(config)).run("stdio")
+    if args.command != "report":
+        build_server(ToolContext.from_config(config)).run("stdio")
+        return
+    try:
+        draft = build_report(config, args.target, args.since, args.until)
+    except ReportError as exc:
+        sys.exit(f"secmcp: {exc}")
+    if args.output is None:
+        sys.stdout.write(draft.markdown)
+        return
+    try:
+        args.output.write_text(draft.markdown, encoding="utf-8")
+    except OSError as exc:
+        sys.exit(f"secmcp: cannot write {args.output}: {exc.strerror}")
+    print(
+        f"wrote {args.output}: {draft.runs} runs, {draft.findings} findings",
+        file=sys.stderr,
+    )
