@@ -9,6 +9,7 @@ Validator = Callable[[str], str | None]
 SHELL_METACHARACTERS = frozenset(";|&$`<>\\'\"(){}[]*?!~# \t")
 _FLAG_NAME = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
 _PORT_RANGE = re.compile(r"(\d{1,5})(?:-(\d{1,5}))?")
+_INT_RANGE = re.compile(r"(\d{1,9})(?:-(\d{1,9}))?")
 
 
 class PolicyError(ValueError):
@@ -69,7 +70,9 @@ def parse_args(
         name, has_inline, inline = (
             arg.partition("=") if arg.startswith("--") else (arg, "", "")
         )
-        reason = _blocked_reason(name, blocked)
+        # An exact allowlist match wins over a short blocked prefix, so -lc can be
+        # allowed while -l and -list stay blocked.
+        reason = None if name in allowed else _blocked_reason(name, blocked)
         if reason:
             raise PolicyError(f"{name} is not allowed: {reason}")
         if not _FLAG_NAME.fullmatch(name):
@@ -121,3 +124,31 @@ def port_list(value: str) -> str | None:
         if not 1 <= low <= high <= 65535:
             return f"invalid port range {part!r}"
     return None
+
+
+def int_list(low: int, high: int) -> Validator:
+    """Validate a comma-separated list of integers or ranges, like 200,301-302."""
+
+    def validate(value: str) -> str | None:
+        for part in value.split(","):
+            match = _INT_RANGE.fullmatch(part)
+            if not match:
+                return f"expected comma-separated integers or ranges, got {value!r}"
+            first = int(match.group(1))
+            last = int(match.group(2) or first)
+            if not low <= first <= last <= high:
+                return f"expected values from {low} to {high}, got {part!r}"
+        return None
+
+    return validate
+
+
+def choice(*options: str) -> Validator:
+    """Validate a comma-separated list where every item is one of options."""
+
+    def validate(value: str) -> str | None:
+        if not all(item in options for item in value.split(",")):
+            return f"expected a comma-separated list of {', '.join(options)}"
+        return None
+
+    return validate
