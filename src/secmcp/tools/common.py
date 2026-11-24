@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from secmcp.audit import AuditRecord, append_record
 from secmcp.config import Config, ToolName
 from secmcp.context import ToolContext
+from secmcp.policy import PolicyError
 from secmcp.runner import RunResult, find_binary, install_hint
 
 Status = Literal[
@@ -44,6 +45,17 @@ def locate(config: Config, tool: ToolName) -> str | None:
     if configured is None:
         return find_binary(tool)
     return find_binary(str(configured))
+
+
+def pick_rate(requested: int | None, maximum: int) -> int:
+    """Return the request rate to use, refusing anything above the configured cap."""
+    if requested is None:
+        return maximum
+    if not 1 <= requested <= maximum:
+        raise PolicyError(
+            f"rate_limit must be from 1 to {maximum}, the cap set in scope.yaml"
+        )
+    return requested
 
 
 def run_paths(runs_dir: Path, tool: str, suffix: str) -> tuple[Path, Path]:
@@ -144,3 +156,9 @@ def set_exit_status(
     else:
         result.status, result.reason = "failed", f"{tool} exited {run.exit_code}"
         result.output = run.output
+
+
+def write_targets(path: Path, urls: list[str]) -> None:
+    """Write checked targets one per line for a tool's list input."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text("".join(f"{url}\n" for url in urls), encoding="utf-8")
