@@ -268,19 +268,21 @@ async def test_missing_binary(config: Config, monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_timeout_is_reported(config: Config) -> None:
-    ctx, _ = make_ctx(config, runner=FakeRunner(xml=b"<nmaprun><host>", timed_out=True))
+    ctx, _ = make_ctx(
+        config, runner=FakeRunner(output=b"<nmaprun><host>", timed_out=True)
+    )
     result = await run_nmap(ctx, "203.0.113.10")
     assert result.status == "timed_out"
-    assert result.output == "Starting Nmap\n"
+    assert result.output == "tool output\n"
     assert read_records(config.audit_log_path, 1)[0].timed_out
 
 
 async def test_failed_run_includes_output(config: Config) -> None:
-    ctx, _ = make_ctx(config, runner=FakeRunner(xml=b"", exit_code=1))
+    ctx, _ = make_ctx(config, runner=FakeRunner(output=b"", exit_code=1))
     result = await run_nmap(ctx, "203.0.113.10")
     assert result.status == "failed"
     assert result.reason.startswith("nmap exited 1")
-    assert result.output == "Starting Nmap\n"
+    assert result.output == "tool output\n"
 
 
 async def test_exec_failure_is_reported_and_logged(config: Config) -> None:
