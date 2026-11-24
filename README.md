@@ -4,7 +4,8 @@ secmcp is an MCP server that lets AI assistants run security tools for authorize
 penetration testing and bug bounty work. Every tool call is checked against a scope
 file and a per-tool flag policy before anything runs, and every call is audited.
 
-It ships nmap, httpx, ffuf and nuclei. sqlmap is planned.
+It ships nmap, httpx, ffuf and nuclei, plus a report helper that turns the audit
+log and saved results into a Markdown bug bounty report draft.
 
 ## Why
 
@@ -112,6 +113,7 @@ Tools:
 | `run_ffuf(url, wordlist, rate_limit?, extra_args?, dry_run?, confirm?)` | Content discovery with `FUZZ` in the url path or query |
 | `run_nuclei(targets, severity?, tags?, exclude_tags?, template_ids?, rate_limit?, extra_args?, dry_run?, confirm?)` | Run nuclei templates and return findings |
 | `get_audit_log(limit)` | Return the most recent audit records |
+| `generate_report(target?, since?, until?)` | Draft a Markdown report from the audit log and saved results |
 
 `scan_type` is one of `quick` (top 100 ports), `top_ports` (top 1000) or
 `service_version` (top 1000 with `-sV`). `extra_args` is a list with one token per
@@ -147,6 +149,38 @@ values.
 
 Other statuses are `blocked`, `needs_approval`, `dry_run`, `missing_binary`,
 `timed_out` and `failed`, each with a `reason`.
+
+## Report drafts
+
+The report helper reads the audit log and the output files saved under
+`data_dir/runs/` and writes a Markdown draft with these sections: summary, scope,
+methodology (every command run, in order), findings grouped by host and severity,
+evidence file references, and empty impact and remediation sections for you to
+write.
+
+From the command line:
+
+```sh
+secmcp report --scope scope.yaml --target example.com \
+  --since 2026-11-24 --until 2026-11-25 -o report.md
+```
+
+Without `-o` the draft goes to stdout. From an MCP client, `generate_report` takes
+the same filters, saves the draft to `data_dir/reports/` and returns it.
+
+- `target` is a domain (subdomains included), an IP or a CIDR. It matches calls
+  whose target is that host or inside that range, and findings from multi-target
+  httpx, ffuf and nuclei runs are filtered by host too. Without it, every call is
+  included.
+- `since` is inclusive and `until` is exclusive, so `--until 2026-11-25` covers all
+  of November 24. Times without a zone are UTC.
+- Only calls that ran are listed. Blocked calls and dry runs are counted in the
+  summary.
+- Findings are nuclei results at their template severity, plus open nmap ports,
+  responding httpx hosts and ffuf matches as info. The same finding from several
+  runs is listed once with every evidence file.
+- Tool output such as page titles is put in code spans or escaped, so a hostile
+  target cannot inject Markdown or HTML into the draft.
 
 ## Security model
 
@@ -220,9 +254,13 @@ Audit log
 - Every call, including blocked ones and `check_scope`, is appended to
   `audit.jsonl` with timestamp, tool, target, argv, dry_run, decision, reason, exit
   code, duration and raw output path.
+- The report helper only reads output files inside `data_dir/runs/`, so an edited
+  audit log cannot make it read other files. The MCP tool cannot choose where the
+  draft is written.
 
 ## Limitations
 
+- sqlmap is not supported.
 - Linux and macOS only, since the runner relies on POSIX process groups.
 - Only the first resolved address of a hostname is scanned (IPv4 preferred), the same
   as nmap's default.
@@ -244,6 +282,9 @@ Audit log
   nuclei's config) are still read by the tools.
 - Scope is enforced on the target you pass. It cannot stop a service on an in-scope
   host from redirecting or proxying your traffic.
+- Report drafts are a starting point. Findings are tool output, not verified
+  vulnerabilities; confirm each one before you submit it. A hostname filter does not
+  match nmap scans that were run against the IP address.
 
 ## Development
 
