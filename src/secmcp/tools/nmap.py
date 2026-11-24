@@ -4,9 +4,10 @@ import ipaddress
 import re
 from functools import cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import anyio
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from secmcp.context import ToolContext
@@ -23,9 +24,14 @@ from secmcp.policy import (
 from secmcp.runner import RunResult
 from secmcp.scope import ScopeDecision, check_target
 from secmcp.tools.common import (
+    RUNS_TOOL,
+    Confirm,
+    DryRun,
+    Plugin,
     ToolResult,
     audit,
     execute,
+    extra_args_field,
     locate,
     parse_failed,
     ready_to_run,
@@ -276,9 +282,60 @@ async def run_nmap(
         binary or "nmap", scan_type, ports, flags, decision.scan_target, xml_path
     )
     result.approval_required = risks
-    if not ready_to_run(ctx.config, "nmap", binary, result, dry_run, confirm):
+    if not ready_to_run(ctx.config, PLUGIN, binary, result, dry_run, confirm):
         return audit(ctx, "nmap", target, result, dry_run)
     run = await execute(ctx, "nmap", result, ctx.config.timeouts.nmap, log_path)
     if run is not None:
         _finish(result, run, xml_path)
     return audit(ctx, "nmap", target, result, dry_run)
+
+
+def register(server: MCPServer, ctx: ToolContext) -> None:
+    """Add the run_nmap tool to the server."""
+
+    @server.tool(name="run_nmap", annotations=RUNS_TOOL)
+    async def tool(
+        target: Annotated[
+            str, Field(description="IP address, CIDR or hostname in scope")
+        ],
+        scan_type: Annotated[
+            ScanType,
+            Field(
+                description="quick: top 100 ports, top_ports: top 1000 ports, "
+                "service_version: top 1000 ports with version detection"
+            ),
+        ] = "quick",
+        ports: Annotated[
+            str | None,
+            Field(
+                description="ports to scan instead of the scan type's set, "
+                "e.g. 22,80,8000-8100"
+            ),
+        ] = None,
+        extra_args: Annotated[
+            list[str] | None, extra_args_field(ALLOWED_FLAGS, "nmap")
+        ] = None,
+        dry_run: DryRun = False,
+        confirm: Confirm = False,
+    ) -> NmapResult:
+        """Run an nmap scan after scope and flag checks and return parsed results."""
+        return await run_nmap(
+            ctx, target, scan_type, ports, extra_args, dry_run, confirm
+        )
+
+
+PLUGIN = Plugin(
+    name="nmap",
+    summary="port scans and service detection",
+    install_hint="install nmap (apt install nmap, brew install nmap) "
+    "or get it from https://nmap.org/download",
+    allowed_flags=ALLOWED_FLAGS,
+    blocked_flags=BLOCKED_FLAGS,
+    dangerous={
+        f"--script {category}": f"scripts in the {category} category"
+        for category in sorted(DANGEROUS_CATEGORIES)
+    },
+    output_suffix=".xml",
+    parse_error=NmapParseError,
+    register=register,
+)

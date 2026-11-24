@@ -2,8 +2,10 @@
 
 import re
 from pathlib import Path
+from typing import Annotated
 
 import anyio
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from secmcp.context import ToolContext
@@ -26,9 +28,15 @@ from secmcp.policy import (
 from secmcp.runner import RunResult
 from secmcp.targets import UrlDecision, check_url
 from secmcp.tools.common import (
+    RUNS_TOOL,
+    Confirm,
+    DryRun,
+    Plugin,
+    RateLimit,
     ToolResult,
     audit,
     execute,
+    extra_args_field,
     locate,
     parse_failed,
     pick_rate,
@@ -219,9 +227,55 @@ async def run_ffuf(
     result.argv = build_argv(
         binary or "ffuf", decision.url, wordlist_path, json_path, rate, flags
     )
-    if not ready_to_run(ctx.config, "ffuf", binary, result, dry_run, confirm):
+    if not ready_to_run(ctx.config, PLUGIN, binary, result, dry_run, confirm):
         return audit(ctx, "ffuf", url, result, dry_run)
     run = await execute(ctx, "ffuf", result, ctx.config.timeouts.ffuf, log_path)
     if run is not None:
         _finish(result, run, json_path)
     return audit(ctx, "ffuf", url, result, dry_run)
+
+
+def register(server: MCPServer, ctx: ToolContext) -> None:
+    """Add the run_ffuf tool to the server."""
+
+    @server.tool(name="run_ffuf", annotations=RUNS_TOOL)
+    async def tool(
+        url: Annotated[
+            str,
+            Field(
+                description="http(s) url in scope with FUZZ in the path or query, "
+                "e.g. https://app.example.com/FUZZ"
+            ),
+        ],
+        wordlist: Annotated[
+            str,
+            Field(
+                description="wordlist file name or path inside a wordlist_dirs "
+                "directory from scope.yaml"
+            ),
+        ],
+        rate_limit: RateLimit = None,
+        extra_args: Annotated[
+            list[str] | None, extra_args_field(ALLOWED_FLAGS, "ffuf")
+        ] = None,
+        dry_run: DryRun = False,
+        confirm: Confirm = False,
+    ) -> FfufResult:
+        """Discover content with ffuf using an allowlisted wordlist."""
+        return await run_ffuf(
+            ctx, url, wordlist, rate_limit, extra_args, dry_run, confirm
+        )
+
+
+PLUGIN = Plugin(
+    name="ffuf",
+    summary="content discovery with allowlisted wordlists",
+    install_hint="install ffuf (apt install ffuf, brew install ffuf, "
+    "or go install github.com/ffuf/ffuf/v2@latest)",
+    allowed_flags=ALLOWED_FLAGS,
+    blocked_flags=BLOCKED_FLAGS,
+    dangerous={},
+    output_suffix=".json",
+    parse_error=FfufParseError,
+    register=register,
+)

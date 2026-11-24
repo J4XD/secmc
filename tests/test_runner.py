@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from secmcp.runner import Runner, find_binary, install_hint, read_capped
+from secmcp.runner import Runner, find_binary, read_capped
 
 pytestmark = pytest.mark.anyio
 
@@ -133,8 +133,6 @@ def test_read_capped_short_file(tmp_path: Path) -> None:
     assert read_capped(path, 100) == ("short�", False)
 
 
-def test_find_binary_and_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_binary_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("shutil.which", lambda name: None)
     assert find_binary("nmap") is None
-    assert "nmap.org" in install_hint("nmap")
-    assert install_hint("foo") == "install foo and make sure it is on PATH"

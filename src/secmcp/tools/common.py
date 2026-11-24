@@ -1,17 +1,22 @@
-"""Result model and run steps shared by the tool wrappers."""
+"""Plugin model, schema pieces, result model and run steps shared by the tools."""
 
 import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel
+from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel, Field
 
 from secmcp.audit import AuditRecord, append_record
 from secmcp.config import Config, ToolName
 from secmcp.context import ToolContext
-from secmcp.policy import PolicyError
-from secmcp.runner import RunResult, find_binary, install_hint
+from secmcp.policy import Flag, PolicyError
+from secmcp.runner import RunResult, find_binary
+from secmcp.targets import MAX_TARGETS
 
 Status = Literal[
     "completed",
@@ -39,12 +44,93 @@ class ToolResult(BaseModel):
 R = TypeVar("R", bound=ToolResult)
 
 
+@dataclass(frozen=True)
+class Plugin:
+    """Everything secmcp needs to know about one wrapped tool."""
+
+    name: ToolName
+    summary: str
+    install_hint: str
+    allowed_flags: Mapping[str, Flag]
+    blocked_flags: Mapping[str, str]
+    dangerous: Mapping[str, str]
+    output_suffix: str
+    parse_error: type[Exception]
+    register: Callable[[MCPServer, ToolContext], None]
+
+    @property
+    def mcp_tool(self) -> str:
+        return f"run_{self.name}"
+
+
+class ToolStatus(BaseModel):
+    name: str
+    mcp_tool: str
+    summary: str
+    installed: bool
+    binary: str | None = None
+    install_hint: str | None = None
+    allowed_flags: list[str]
+    needs_approval: dict[str, str]
+
+
+RUNS_TOOL = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, open_world_hint=True
+)
+DryRun = Annotated[
+    bool, Field(description="return the exact command without running it")
+]
+Confirm = Annotated[
+    bool,
+    Field(description="set only after a human approved a needs_approval result"),
+]
+RateLimit = Annotated[
+    int | None,
+    Field(
+        ge=1,
+        description="requests per second, at most the cap in scope.yaml "
+        "(default: the cap)",
+    ),
+]
+WebTargets = Annotated[
+    list[str],
+    Field(
+        min_length=1,
+        max_length=MAX_TARGETS,
+        description="urls (http or https) or host[:port] values, all in scope",
+    ),
+]
+
+
+def extra_args_field(allowed: Mapping[str, Flag], tool: str) -> Any:
+    """Describe an extra_args parameter, listing the allowed flags."""
+    return Field(
+        description=f"extra {tool} flags, one list item per token. Allowed: "
+        + " ".join(sorted(allowed))
+    )
+
+
 def locate(config: Config, tool: ToolName) -> str | None:
     """Return the configured binary path if it is executable, else search PATH."""
     configured = config.binaries.get(tool)
     if configured is None:
         return find_binary(tool)
     return find_binary(str(configured))
+
+
+def tool_status(config: Config, plugin: Plugin) -> ToolStatus:
+    """Report whether a plugin's binary is installed and what its policy allows."""
+    binary = locate(config, plugin.name)
+    return ToolStatus(
+        name=plugin.name,
+        mcp_tool=plugin.mcp_tool,
+        summary=plugin.summary,
+        installed=binary is not None,
+        binary=binary,
+        install_hint=None if binary else plugin.install_hint,
+        allowed_flags=sorted(plugin.allowed_flags),
+        needs_approval=dict(plugin.dangerous),
+    )
 
 
 def pick_rate(requested: int | None, maximum: int) -> int:
@@ -99,7 +185,7 @@ def approval_reason(config: Config, confirm: bool) -> str | None:
 
 def ready_to_run(
     config: Config,
-    tool: str,
+    plugin: Plugin,
     binary: str | None,
     result: ToolResult,
     dry_run: bool,
@@ -111,14 +197,14 @@ def ready_to_run(
         result.status = "dry_run"
         result.reason = approval or "dry run, nothing executed"
         if binary is None:
-            result.reason += f"; {tool} not found: {install_hint(tool)}"
+            result.reason += f"; {plugin.name} not found: {plugin.install_hint}"
         return False
     if approval:
         result.status, result.reason = "needs_approval", approval
         return False
     if binary is None:
         result.status = "missing_binary"
-        result.reason = f"{tool} not found: {install_hint(tool)}"
+        result.reason = f"{plugin.name} not found: {plugin.install_hint}"
         return False
     return True
 
