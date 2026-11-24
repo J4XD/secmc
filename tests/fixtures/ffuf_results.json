@@ -1,0 +1,148 @@
+{
+  "commandline": "ffuf -u http://127.0.0.1:18080/FUZZ -w /usr/share/wordlists/small.txt -ic -o /tmp/run.json -of json -s -noninteractive -rate 10 -mc 200,301",
+  "time": "2026-11-24T19:11:27Z",
+  "results": [
+    {
+      "input": {
+        "FFUFHASH": "bffeb1",
+        "FUZZ": "admin"
+      },
+      "position": 1,
+      "status": 301,
+      "length": 0,
+      "words": 1,
+      "lines": 1,
+      "content-type": "",
+      "redirectlocation": "/admin/",
+      "scraper": {},
+      "duration": 447988,
+      "resultfile": "",
+      "url": "http://127.0.0.1:18080/admin",
+      "host": "127.0.0.1:18080"
+    },
+    {
+      "input": {
+        "FFUFHASH": "bffeb2",
+        "FUZZ": "robots.txt"
+      },
+      "position": 2,
+      "status": 200,
+      "length": 14,
+      "words": 2,
+      "lines": 2,
+      "content-type": "text/plain",
+      "redirectlocation": "",
+      "scraper": {},
+      "duration": 602752,
+      "resultfile": "",
+      "url": "http://127.0.0.1:18080/robots.txt",
+      "host": "127.0.0.1:18080"
+    },
+    {
+      "input": {
+        "FFUFHASH": "bffeb4",
+        "FUZZ": "index.html"
+      },
+      "position": 4,
+      "status": 200,
+      "length": 69,
+      "words": 2,
+      "lines": 2,
+      "content-type": "text/html",
+      "redirectlocation": "",
+      "scraper": {},
+      "duration": 359367,
+      "resultfile": "",
+      "url": "http://127.0.0.1:18080/index.html",
+      "host": "127.0.0.1:18080"
+    }
+  ],
+  "config": {
+    "auditlog": "",
+    "autocalibration": false,
+    "autocalibration_keyword": "FUZZ",
+    "autocalibration_perhost": false,
+    "autocalibration_strategies": [
+      "basic"
+    ],
+    "autocalibration_strings": [],
+    "colors": false,
+    "cmdline": "ffuf -u http://127.0.0.1:18080/FUZZ -w /usr/share/wordlists/small.txt -ic -o /tmp/run.json -of json -s -noninteractive -rate 10 -mc 200,301",
+    "configfile": "",
+    "postdata": "",
+    "debuglog": "",
+    "delay": {
+      "value": "0.00"
+    },
+    "dirsearch_compatibility": false,
+    "encoders": [],
+    "extensions": [],
+    "fmode": "or",
+    "follow_redirects": false,
+    "headers": {},
+    "ignorebody": false,
+    "ignore_wordlist_comments": true,
+    "inputmode": "clusterbomb",
+    "cmd_inputnum": 100,
+    "inputproviders": [
+      {
+        "name": "wordlist",
+        "keyword": "FUZZ",
+        "value": "/usr/share/wordlists/small.txt",
+        "encoders": "",
+        "template": ""
+      }
+    ],
+    "inputshell": "",
+    "json": false,
+    "matchers": {
+      "IsCalibrated": false,
+      "Matchers": {
+        "status": {
+          "value": "200,301"
+        }
+      },
+      "Filters": {},
+      "PerDomainFilters": {}
+    },
+    "mmode": "or",
+    "maxtime": 0,
+    "maxtime_job": 0,
+    "method": "GET",
+    "noninteractive": true,
+    "outputdirectory": "",
+    "outputfile": "/tmp/run.json",
+    "outputformat": "json",
+    "OutputSkipEmptyFile": false,
+    "proxyurl": "",
+    "quiet": true,
+    "rate": 10,
+    "raw": false,
+    "recursion": false,
+    "recursion_depth": 0,
+    "recursion_strategy": "default",
+    "replayproxyurl": "",
+    "requestfile": "",
+    "requestproto": "https",
+    "scraperfile": "",
+    "scrapers": "all",
+    "sni": "",
+    "stop_403": false,
+    "stop_all": false,
+    "stop_errors": false,
+    "threads": 40,
+    "timeout": 10,
+    "url": "http://127.0.0.1:18080/FUZZ",
+    "verbose": false,
+    "wordlists": [
+      "/usr/share/wordlists/small.txt"
+    ],
+    "http2": false,
+    "client-cert": "",
+    "client-key": "",
+    "preflights": [],
+    "postflights": [],
+    "preflight_mode": "per-request",
+    "preflight_error": "abort"
+  }
+}
