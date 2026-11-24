@@ -15,12 +15,13 @@ from pydantic import BaseModel, Field
 
 from secmcp import __version__
 from secmcp.audit import AuditRecord, append_record, read_records
-from secmcp.config import ConfigError, load_config
+from secmcp.config import Config, ConfigError, load_config
 from secmcp.context import ToolContext
 from secmcp.report import ReportError, ReportResult, build_report, write_report
 from secmcp.scope import check_target
 from secmcp.targets import UrlDecision, check_url
 from secmcp.tools import PLUGINS
+from secmcp.tools.common import ToolStatus, tool_status
 
 INSTRUCTIONS = """\
 secmcp runs security tools against targets that are in the operator's scope file.
@@ -39,6 +40,10 @@ def scope_check(target: str, ctx: ToolContext) -> UrlDecision:
 
 class AuditLogResult(BaseModel):
     records: list[AuditRecord]
+
+
+class ToolsResult(BaseModel):
+    tools: list[ToolStatus]
 
 
 def build_server(ctx: ToolContext) -> MCPServer:
@@ -68,6 +73,15 @@ def build_server(ctx: ToolContext) -> MCPServer:
 
     for plugin in PLUGINS:
         plugin.register(server, ctx)
+
+    @server.tool(
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False)
+    )
+    def check_tools() -> ToolsResult:
+        """List the wrapped tools, whether each is installed, and its flag policy."""
+        return ToolsResult(
+            tools=[tool_status(ctx.config, plugin) for plugin in PLUGINS]
+        )
 
     @server.tool(
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -148,16 +162,34 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument(
         "-o", "--output", type=Path, help="write the draft here instead of stdout"
     )
+    check = commands.add_parser(
+        "check", help="show which tool binaries are installed; exit 1 if any is missing"
+    )
+    check.add_argument("--scope", type=Path, default=argparse.SUPPRESS, help=scope_help)
     return parser
 
 
+def check_binaries(config: Config) -> bool:
+    """Print one line per tool; True if every binary was found."""
+    statuses = [tool_status(config, plugin) for plugin in PLUGINS]
+    width = max(len(status.name) for status in statuses)
+    for status in statuses:
+        detail = (
+            status.binary if status.installed else f"missing: {status.install_hint}"
+        )
+        print(f"{status.name:<{width}}  {detail}")
+    return all(status.installed for status in statuses)
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Serve over stdio, or print a report draft with the report command."""
+    """Serve over stdio, or run the report or check command."""
     args = _parser().parse_args(argv)
     try:
         config = load_config(args.scope)
     except ConfigError as exc:
         sys.exit(f"secmcp: {exc}")
+    if args.command == "check":
+        sys.exit(0 if check_binaries(config) else 1)
     if args.command != "report":
         build_server(ToolContext.from_config(config)).run("stdio")
         return
