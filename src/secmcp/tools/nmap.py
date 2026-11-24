@@ -2,16 +2,13 @@
 
 import ipaddress
 import re
-import uuid
-from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Literal
 
 import anyio
-from pydantic import BaseModel
+from pydantic import Field
 
-from secmcp.audit import AuditRecord, append_record
 from secmcp.context import ToolContext
 from secmcp.parsers.nmap_xml import Host, NmapParseError, parse_nmap_xml
 from secmcp.policy import (
@@ -23,19 +20,20 @@ from secmcp.policy import (
     parse_args,
     port_list,
 )
-from secmcp.runner import RunResult, find_binary, install_hint
+from secmcp.runner import RunResult
 from secmcp.scope import ScopeDecision, check_target
+from secmcp.tools.common import (
+    ToolResult,
+    audit,
+    execute,
+    locate,
+    parse_failed,
+    ready_to_run,
+    run_paths,
+    set_exit_status,
+)
 
 ScanType = Literal["quick", "top_ports", "service_version"]
-Status = Literal[
-    "completed",
-    "failed",
-    "timed_out",
-    "blocked",
-    "needs_approval",
-    "dry_run",
-    "missing_binary",
-]
 
 SCAN_TYPES: dict[str, tuple[list[str], list[str]]] = {
     "quick": (["-T4"], ["-F"]),
@@ -130,20 +128,11 @@ BLOCKED_FLAGS: dict[str, str] = {
 }
 
 
-class NmapResult(BaseModel):
-    status: Status
-    reason: str
+class NmapResult(ToolResult):
     target: str
     scope: ScopeDecision | None = None
-    argv: list[str] = []
-    approval_required: list[str] = []
-    summary: str = ""
-    hosts: list[Host] = []
-    exit_code: int | None = None
-    duration_s: float | None = None
-    raw_output_path: str | None = None
+    hosts: list[Host] = Field(default_factory=list)
     xml_path: str | None = None
-    output: str | None = None
 
 
 def load_script_db(path: Path) -> dict[str, frozenset[str]]:
@@ -242,63 +231,15 @@ def _is_ipv6(target: str) -> bool:
     return ipaddress.ip_network(target, strict=False).version == 6
 
 
-def _run_paths(runs_dir: Path) -> tuple[Path, Path]:
-    run_id = f"nmap-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
-    return runs_dir / f"{run_id}.xml", runs_dir / f"{run_id}.log"
-
-
-def _audit(ctx: ToolContext, result: NmapResult, dry_run: bool) -> NmapResult:
-    allowed = result.status not in ("blocked", "needs_approval", "missing_binary")
-    append_record(
-        ctx.config.audit_log_path,
-        AuditRecord(
-            tool="nmap",
-            target=result.target,
-            argv=result.argv,
-            dry_run=dry_run,
-            decision="allowed" if allowed else "blocked",
-            reason=result.reason,
-            exit_code=result.exit_code,
-            timed_out=result.status == "timed_out",
-            duration_s=result.duration_s,
-            raw_output_path=result.raw_output_path,
-        ),
-    )
-    return result
-
-
-def _approval_reason(ctx: ToolContext, confirm: bool) -> str | None:
-    missing = []
-    if not ctx.config.allow_dangerous:
-        missing.append("allow_dangerous: true in scope.yaml")
-    if not confirm:
-        missing.append("confirm=true on the call")
-    if not missing:
-        return None
-    return "needs human approval: requires " + " and ".join(missing)
-
-
 def _finish(result: NmapResult, run: RunResult, xml_path: Path) -> NmapResult:
-    result.exit_code = run.exit_code
-    result.duration_s = run.duration_s
-    result.raw_output_path = str(run.raw_output_path)
     result.xml_path = str(xml_path)
-    if run.timed_out:
-        result.status, result.reason = "timed_out", f"timed out after {run.duration_s}s"
-        result.output = run.output
-        return result
     try:
         scan = parse_nmap_xml(xml_path.read_bytes())
     except (OSError, NmapParseError) as exc:
-        result.status, result.reason = "failed", f"nmap exited {run.exit_code}: {exc}"
-        result.output = run.output
+        parse_failed(result, "nmap", run, str(exc))
         return result
     result.hosts, result.summary = scan.hosts, scan.summary
-    if run.exit_code == 0:
-        result.status, result.reason = "completed", "scan completed"
-    else:
-        result.status, result.reason = "failed", f"nmap exited {run.exit_code}"
-        result.output = run.output
+    set_exit_status(result, "nmap", run)
     return result
 
 
@@ -319,43 +260,25 @@ async def run_nmap(
         status="blocked", reason=decision.reason, target=target, scope=decision
     )
     if not decision.allowed or decision.scan_target is None:
-        return _audit(ctx, result, dry_run)
+        return audit(ctx, "nmap", target, result, dry_run)
 
-    binary = find_binary("nmap")
+    binary = locate(ctx.config, "nmap")
     script_db_path = find_script_db(ctx.config.nmap_script_db, binary)
     script_db = _cached_script_db(script_db_path) if script_db_path else None
     try:
         flags, risks = check_flags(ports, extra_args or [], script_db)
     except PolicyError as exc:
         result.reason = str(exc)
-        return _audit(ctx, result, dry_run)
+        return audit(ctx, "nmap", target, result, dry_run)
 
-    xml_path, log_path = _run_paths(ctx.config.runs_dir)
+    xml_path, log_path = run_paths(ctx.config.runs_dir, "nmap", ".xml")
     result.argv = build_argv(
         binary or "nmap", scan_type, ports, flags, decision.scan_target, xml_path
     )
     result.approval_required = risks
-    approval = _approval_reason(ctx, confirm) if risks else None
-
-    if dry_run:
-        result.status = "dry_run"
-        result.reason = approval or "dry run, nothing executed"
-        if binary is None:
-            result.reason += f"; nmap not found: {install_hint('nmap')}"
-        return _audit(ctx, result, dry_run)
-    if approval:
-        result.status, result.reason = "needs_approval", approval
-        return _audit(ctx, result, dry_run)
-    if binary is None:
-        result.status, result.reason = (
-            "missing_binary",
-            f"nmap not found: {install_hint('nmap')}",
-        )
-        return _audit(ctx, result, dry_run)
-
-    try:
-        run = await ctx.runner.run(result.argv, ctx.config.timeouts.nmap, log_path)
-    except OSError as exc:
-        result.status, result.reason = "failed", f"could not start nmap: {exc}"
-        return _audit(ctx, result, dry_run)
-    return _audit(ctx, _finish(result, run, xml_path), dry_run)
+    if not ready_to_run(ctx.config, "nmap", binary, result, dry_run, confirm):
+        return audit(ctx, "nmap", target, result, dry_run)
+    run = await execute(ctx, "nmap", result, ctx.config.timeouts.nmap, log_path)
+    if run is not None:
+        _finish(result, run, xml_path)
+    return audit(ctx, "nmap", target, result, dry_run)

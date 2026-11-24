@@ -26,6 +26,22 @@ METADATA_ADDRESSES = frozenset(
     )
 )
 
+RESTRICTED_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
+
 _LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 _NUMERIC_LABEL = re.compile(r"(0x[0-9a-f]+|[0-9]+)")
 
@@ -287,3 +303,32 @@ def check_target(
     if isinstance(target, ipaddress.IPv4Address | ipaddress.IPv6Address):
         return _check_address(raw, target, scope)
     return _check_domain(raw, target, scope, resolve)
+
+
+def connect_denylist(scope: Scope) -> list[str]:
+    """Networks an HTTP tool must never connect to, even if a name re-resolves there.
+
+    Covers exclusions, metadata addresses and the common private ranges that no
+    allow entry overlaps.
+    """
+    denied = [str(entry.network) for entry in scope.exclude if entry.network]
+    denied += [
+        str(address)
+        for address in sorted(METADATA_ADDRESSES, key=_address_order)
+        if not _explicitly_allowed(address, scope)
+    ]
+    denied += [
+        str(network)
+        for network in RESTRICTED_NETWORKS
+        if not any(_overlaps(network, entry) for entry in scope.allow)
+    ]
+    return denied
+
+
+def allows_restricted(scope: Scope) -> bool:
+    """True if any allow entry overlaps a private or other restricted range."""
+    return any(
+        _overlaps(network, entry)
+        for network in RESTRICTED_NETWORKS
+        for entry in scope.allow
+    )

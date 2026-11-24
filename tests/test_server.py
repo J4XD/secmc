@@ -7,7 +7,7 @@ from mcp.types import CallToolResult
 
 from secmcp import server
 from secmcp.config import Config
-from secmcp.tools import nmap
+from secmcp.tools import common
 from tests.helpers import make_ctx
 
 pytestmark = pytest.mark.anyio
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture(autouse=True)
 def _nmap_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(nmap, "find_binary", lambda name: "/usr/bin/nmap")
+    monkeypatch.setattr(common, "find_binary", lambda name: "/usr/bin/nmap")
 
 
 async def call(config: Config, tool: str, arguments: dict[str, Any]) -> Any:
@@ -29,7 +29,14 @@ async def call(config: Config, tool: str, arguments: dict[str, Any]) -> Any:
 async def test_tools_are_listed_with_schemas(config: Config) -> None:
     ctx, _ = make_ctx(config)
     tools = {tool.name: tool for tool in await server.build_server(ctx).list_tools()}
-    assert set(tools) == {"run_nmap", "check_scope", "get_audit_log"}
+    assert set(tools) == {
+        "run_nmap",
+        "run_httpx",
+        "run_ffuf",
+        "run_nuclei",
+        "check_scope",
+        "get_audit_log",
+    }
     schema = tools["run_nmap"].input_schema
     assert schema["required"] == ["target"]
     assert set(schema["properties"]) == {
@@ -42,6 +49,9 @@ async def test_tools_are_listed_with_schemas(config: Config) -> None:
     }
     assert "--script" in schema["properties"]["extra_args"]["description"]
     assert tools["run_nmap"].output_schema is not None
+    assert tools["run_nuclei"].input_schema["required"] == ["targets"]
+    assert "intrusive" in str(tools["run_nuclei"].input_schema["properties"]["tags"])
+    assert tools["run_ffuf"].input_schema["required"] == ["url", "wordlist"]
 
 
 async def test_run_nmap_dry_run_over_mcp(config: Config) -> None:
@@ -61,6 +71,47 @@ async def test_invalid_scan_type_is_rejected(config: Config) -> None:
             "run_nmap", {"target": "203.0.113.10", "scan_type": "aggressive"}
         )
     assert runner.calls == []
+
+
+async def test_run_httpx_dry_run_over_mcp(config: Config) -> None:
+    content = await call(
+        config,
+        "run_httpx",
+        {"targets": ["https://www.example.com"], "rate_limit": 5, "dry_run": True},
+    )
+    assert content["status"] == "dry_run"
+    assert content["scope"][0]["url"] == "https://www.example.com"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "message"),
+    [
+        ("run_httpx", {"targets": []}, "targets"),
+        ("run_httpx", {"targets": ["www.example.com"], "rate_limit": 0}, "rate_limit"),
+        (
+            "run_nuclei",
+            {"targets": ["www.example.com"], "severity": ["severe"]},
+            "severity",
+        ),
+    ],
+)
+async def test_schema_violations_are_rejected(
+    config: Config, tool: str, arguments: dict[str, Any], message: str
+) -> None:
+    ctx, runner = make_ctx(config)
+    with pytest.raises(ToolError, match=message):
+        await server.build_server(ctx).call_tool(tool, arguments)
+    assert runner.calls == []
+
+
+async def test_check_scope_accepts_urls(config: Config) -> None:
+    content = await call(
+        config, "check_scope", {"target": "https://www.example.com/login"}
+    )
+    assert content["allowed"] is True
+    assert content["url"] == "https://www.example.com/login"
+    content = await call(config, "check_scope", {"target": "203.0.113.0/28"})
+    assert (content["allowed"], content["url"]) == (True, None)
 
 
 async def test_check_scope_is_logged(config: Config) -> None:

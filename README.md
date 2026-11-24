@@ -4,7 +4,7 @@ secmcp is an MCP server that lets AI assistants run security tools for authorize
 penetration testing and bug bounty work. Every tool call is checked against a scope
 file and a per-tool flag policy before anything runs, and every call is audited.
 
-Phase 1 ships nmap. httpx, ffuf, nuclei and sqlmap are planned.
+It ships nmap, httpx, ffuf and nuclei. sqlmap is planned.
 
 ## Why
 
@@ -21,16 +21,24 @@ secmcp is safe by default instead:
 
 ## Install
 
-Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Linux or macOS, and nmap.
+Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Linux or macOS, and the
+tools you want to use. Missing tools are reported with an install hint when called.
 
 ```sh
-# nmap
 sudo apt install nmap        # or: brew install nmap
+go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install github.com/ffuf/ffuf/v2@latest
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+nuclei -update-templates
 
 # secmcp, from a checkout of this repository
 uv tool install .
 secmcp --version
 ```
+
+The Python `httpx` package also installs an `httpx` command on some systems. If
+that one comes first on PATH, point secmcp at ProjectDiscovery's binary with
+`binaries: {httpx: /path/to/httpx}`.
 
 ## Configure scope
 
@@ -51,6 +59,15 @@ exclude:
 allow_dangerous: false
 timeouts:
   nmap: 900
+  httpx: 600
+  ffuf: 1800
+  nuclei: 3600
+rate_limits:              # requests per second, the most a call may ask for
+  httpx: 50
+  ffuf: 50
+  nuclei: 50
+wordlist_dirs:            # ffuf only reads wordlists inside these directories
+  - /usr/share/seclists
 data_dir: ~/.local/share/secmcp
 ```
 
@@ -91,6 +108,9 @@ Tools:
 | --- | --- |
 | `check_scope(target)` | Explain whether a target is in scope, without sending it traffic |
 | `run_nmap(target, scan_type, ports?, extra_args?, dry_run?, confirm?)` | Run a scan and return parsed results |
+| `run_httpx(targets, rate_limit?, extra_args?, dry_run?, confirm?)` | Probe web servers: status, title, server, tech, ip |
+| `run_ffuf(url, wordlist, rate_limit?, extra_args?, dry_run?, confirm?)` | Content discovery with `FUZZ` in the url path or query |
+| `run_nuclei(targets, severity?, tags?, exclude_tags?, template_ids?, rate_limit?, extra_args?, dry_run?, confirm?)` | Run nuclei templates and return findings |
 | `get_audit_log(limit)` | Return the most recent audit records |
 
 `scan_type` is one of `quick` (top 100 ports), `top_ports` (top 1000) or
@@ -116,6 +136,15 @@ which return (abbreviated):
 }
 ```
 
+The web tools take urls (`https://app.example.com/login`) or `host[:port]` values.
+For example, `run_ffuf` with
+`{"url": "https://app.example.com/FUZZ", "wordlist": "Discovery/Web-Content/common.txt", "extra_args": ["-mc", "200,301", "-ac"]}`
+returns `matches` with the word, url, status, length, words, lines and redirect
+location of each hit, and `run_nuclei` with
+`{"targets": ["https://app.example.com"], "severity": ["high", "critical"], "tags": ["cve"]}`
+returns `findings` with template id, name, severity, tags, matched url and extracted
+values.
+
 Other statuses are `blocked`, `needs_approval`, `dry_run`, `missing_binary`,
 `timed_out` and `failed`, each with a `reason`.
 
@@ -123,7 +152,7 @@ Other statuses are `blocked`, `needs_approval`, `dry_run`, `missing_binary`,
 
 Scope guard
 
-- Targets may be an IP, a CIDR (at most 65536 addresses) or a hostname. URLs,
+- nmap targets may be an IP, a CIDR (at most 65536 addresses) or a hostname. URLs,
   values starting with `-`, and numeric shorthand such as `127.1` are rejected.
 - Exclusions are checked first and always win.
 - Hostnames must match an allowed domain or wildcard, then are resolved. Every
@@ -136,6 +165,23 @@ Scope guard
   (169.254.169.254, 169.254.170.2, 100.100.100.200, 168.63.129.16, fd00:ec2::254)
   additionally need their own single-address allow entry.
 
+Web targets
+
+- httpx, ffuf and nuclei accept only `http` and `https` urls or `host[:port]`. URLs
+  with credentials, backslashes, whitespace or control characters are refused, and
+  the url is rebuilt from the parsed host so the tool sees exactly the host that was
+  checked.
+- If any target in a call is out of scope, the whole call is refused.
+- Targets are written to a list file instead of the command line, because httpx and
+  nuclei split command line targets on commas.
+- These tools connect by name, so a name could re-resolve after the check. As a
+  backstop, httpx gets a `-deny` list of excluded networks, metadata addresses and
+  private ranges that no allow entry covers, and nuclei gets `-lna` (no local or
+  private network access) unless the scope allows a private range.
+- Following redirects to other hosts is off: httpx and nuclei may only use their
+  same-host redirect options, nuclei runs with `-dr`, and ffuf's `-r` is refused.
+- Request rates default to the cap in `rate_limits` and a call can only go lower.
+
 Flag policy
 
 - Each tool has an allowlist of flags and validates each flag's value. Unknown flags
@@ -147,6 +193,16 @@ Flag policy
 - nmap scripts are checked against nmap's `script.db`. Scripts in the `intrusive`,
   `exploit`, `dos` or `brute` categories need approval. `broadcast` scripts and
   `--script all` are always refused because they send traffic beyond the target.
+- ffuf wordlists must resolve, after following symlinks, to a file inside one of
+  `wordlist_dirs`. `FUZZ` must be in the url path or query, never in the host.
+  `-input-cmd`, raw request files, proxies, custom headers and output options are
+  refused.
+- nuclei runs only the installed template set: custom template paths, template
+  urls, workflows, code, file, headless and dast templates are refused. Templates
+  tagged `intrusive`, `dos`, `fuzz`, `fuzzing`, `bruteforce`, `default-login`,
+  `token-spray`, `file-upload`, `fileupload` or `file-write` are always excluded
+  unless you request the tag and approve it. Interactsh is off (`-ni`), so no data
+  goes to the public OAST servers.
 - Approval means `allow_dangerous: true` in scope.yaml and `confirm=true` on the
   call. Without both, the tool returns `needs_approval` and lists what is missing.
 
@@ -178,6 +234,14 @@ Audit log
   exclude its IP or CIDR.
 - The audit log is append-only by convention, not tamper-proof. Ship it elsewhere if
   you need that.
+- httpx, ffuf and nuclei resolve hostnames again when they connect. The deny list
+  and `-lna` cover excluded and private networks, but ffuf has no equivalent option,
+  and a name that moves to another public address is not caught. Prefer IP targets
+  when that matters.
+- nuclei templates that need interactsh (blind SSRF, OOB checks) do not run.
+- Custom headers and cookies are not supported yet for the web tools.
+- Tool config files in your home directory (such as `~/.config/ffuf/ffufrc` or
+  nuclei's config) are still read by the tools.
 - Scope is enforced on the target you pass. It cannot stop a service on an in-scope
   host from redirecting or proxying your traffic.
 

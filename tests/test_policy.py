@@ -5,8 +5,10 @@ from secmcp.policy import (
     ParsedFlag,
     PolicyError,
     check_text,
+    choice,
     duration,
     int_between,
+    int_list,
     parse_args,
     port_list,
 )
@@ -75,3 +77,16 @@ def test_validators() -> None:
     assert duration("5 m") is not None
     assert int_between(0, 9)("10") is not None
     assert int_between(0, 9)("-1") is not None
+    assert int_list(100, 599)("200,301-302") is None
+    assert int_list(100, 599)("302-301") is not None
+    assert int_list(0, 10)("1,,2") is not None
+    assert choice("GET", "HEAD")("GET,HEAD") is None
+    assert choice("GET", "HEAD")("GET,POST") is not None
+
+
+def test_exact_allowed_flag_wins_over_short_blocked_prefix() -> None:
+    allowed = {"-lc": Flag()}
+    blocked = {"-l": "targets come only from the target argument"}
+    assert parse_args(["-lc"], allowed, blocked) == [ParsedFlag("-lc")]
+    with pytest.raises(PolicyError, match="targets come only"):
+        parse_args(["-list"], allowed, blocked)

@@ -20,14 +20,19 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeRunner(Runner):
+    """Records argv and writes canned output to the path after -oX or -o."""
+
     def __init__(
-        self, xml: bytes | None = None, exit_code: int = 0, timed_out: bool = False
+        self,
+        output: bytes | None = None,
+        exit_code: int = 0,
+        timed_out: bool = False,
     ) -> None:
         super().__init__(max_concurrency=1, max_output_bytes=1000)
         self.calls: list[list[str]] = []
-        self.xml = (
-            xml
-            if xml is not None
+        self.output = (
+            output
+            if output is not None
             else (FIXTURES / "nmap_service_version.xml").read_bytes()
         )
         self.exit_code = exit_code
@@ -37,16 +42,17 @@ class FakeRunner(Runner):
         self, argv: list[str], timeout: float, raw_output_path: Path
     ) -> RunResult:
         self.calls.append(argv)
-        xml_path = Path(argv[argv.index("-oX") + 1])
-        xml_path.parent.mkdir(parents=True, exist_ok=True)
-        xml_path.write_bytes(self.xml)
-        raw_output_path.write_text("Starting Nmap\n")
+        flag = "-oX" if "-oX" in argv else "-o"
+        output_path = Path(argv[argv.index(flag) + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(self.output)
+        raw_output_path.write_text("tool output\n")
         return RunResult(
             argv=argv,
             exit_code=None if self.timed_out else self.exit_code,
             timed_out=self.timed_out,
             duration_s=1.5,
-            output="Starting Nmap\n",
+            output="tool output\n",
             truncated=False,
             raw_output_path=raw_output_path,
         )
