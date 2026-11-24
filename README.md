@@ -174,6 +174,8 @@ Audit log
 - Scripts can be named only when nmap's `script.db` is found. Categories work
   without it. Set `nmap_script_db` if it lives somewhere unusual.
 - nmap still does reverse DNS lookups unless you pass `-n`.
+- Domain exclusions match names only. To keep a host's address out of scope as well,
+  exclude its IP or CIDR.
 - The audit log is append-only by convention, not tamper-proof. Ship it elsewhere if
   you need that.
 - Scope is enforced on the target you pass. It cannot stop a service on an in-scope
