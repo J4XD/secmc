@@ -56,3 +56,9 @@ def test_unknown_binary_name_is_rejected(tmp_path: Path) -> None:
     path.write_text("allow: [example.com]\nbinaries: {bash: /bin/bash}\n")
     with pytest.raises(ConfigError, match="binaries"):
         load_config(path)
+
+
+def test_example_scope_file_loads() -> None:
+    config = load_config(Path(__file__).parent.parent / "scope.example.yaml")
+    assert "scanme.nmap.org" in config.allow
+    assert not config.allow_dangerous

@@ -14,8 +14,8 @@ exclude:
   - admin.example.com
   - "*.internal.example.com"
 
-# Dangerous options (intrusive, exploit, dos and brute nmap scripts) run only
-# when this is true AND the tool call passes confirm=true.
+# Dangerous options (intrusive, exploit, dos and brute nmap scripts, and
+# intrusive nuclei tags) run only when this is true AND the call passes confirm=true.
 allow_dangerous: false
 
 max_concurrency: 2
@@ -23,9 +23,27 @@ max_output_bytes: 20000
 
 timeouts:
   nmap: 900
+  httpx: 600
+  ffuf: 1800
+  nuclei: 3600
+
+# Requests per second for the web tools. A call may ask for less, never more.
+rate_limits:
+  httpx: 50
+  ffuf: 50
+  nuclei: 50
+
+# ffuf only reads wordlists inside these directories.
+wordlist_dirs:
+  - /usr/share/seclists
+  - /usr/share/wordlists
 
 # Audit log and raw tool output. Relative paths resolve against this file.
 data_dir: ~/.local/share/secmcp
 
 # Optional: path to nmap's script.db if it is not found next to the nmap binary.
 # nmap_script_db: /usr/share/nmap/scripts/script.db
+
+# Optional: binary paths, if a tool is not on PATH or the wrong one is found first.
+# binaries:
+#   httpx: ~/go/bin/httpx
