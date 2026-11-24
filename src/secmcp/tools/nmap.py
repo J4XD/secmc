@@ -353,5 +353,9 @@ async def run_nmap(
         )
         return _audit(ctx, result, dry_run)
 
-    run = await ctx.runner.run(result.argv, ctx.config.timeouts.nmap, log_path)
+    try:
+        run = await ctx.runner.run(result.argv, ctx.config.timeouts.nmap, log_path)
+    except OSError as exc:
+        result.status, result.reason = "failed", f"could not start nmap: {exc}"
+        return _audit(ctx, result, dry_run)
     return _audit(ctx, _finish(result, run, xml_path), dry_run)

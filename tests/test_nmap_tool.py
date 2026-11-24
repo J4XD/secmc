@@ -5,6 +5,7 @@ import pytest
 
 from secmcp.audit import read_records
 from secmcp.config import Config
+from secmcp.runner import RunResult
 from secmcp.tools import nmap
 from secmcp.tools.nmap import load_script_db, run_nmap
 from tests.helpers import FIXTURES, FakeRunner, make_ctx
@@ -280,6 +281,20 @@ async def test_failed_run_includes_output(config: Config) -> None:
     assert result.status == "failed"
     assert result.reason.startswith("nmap exited 1")
     assert result.output == "Starting Nmap\n"
+
+
+async def test_exec_failure_is_reported_and_logged(config: Config) -> None:
+    class BrokenRunner(FakeRunner):
+        async def run(
+            self, argv: list[str], timeout: float, raw_output_path: Path
+        ) -> RunResult:
+            raise PermissionError(13, "Permission denied")
+
+    ctx, _ = make_ctx(config, runner=BrokenRunner())
+    result = await run_nmap(ctx, "203.0.113.10")
+    assert result.status == "failed"
+    assert "could not start nmap" in result.reason
+    assert read_records(config.audit_log_path, 1)[0].reason == result.reason
 
 
 def test_load_script_db() -> None:
