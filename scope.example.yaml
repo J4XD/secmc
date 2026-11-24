@@ -1,0 +1,31 @@
+# Copy to scope.yaml and list only targets you are authorized to test.
+
+# IPs, CIDRs, exact domains and wildcard domains.
+# "*.example.com" matches subdomains only; list "example.com" too for the apex.
+allow:
+  - scanme.nmap.org
+  - 203.0.113.0/24
+  - example.com
+  - "*.example.com"
+
+# Exclusions always win, including for addresses a domain resolves to.
+exclude:
+  - 203.0.113.1
+  - admin.example.com
+  - "*.internal.example.com"
+
+# Dangerous options (intrusive, exploit, dos and brute nmap scripts) run only
+# when this is true AND the tool call passes confirm=true.
+allow_dangerous: false
+
+max_concurrency: 2
+max_output_bytes: 20000
+
+timeouts:
+  nmap: 900
+
+# Audit log and raw tool output. Relative paths resolve against this file.
+data_dir: ~/.local/share/secmcp
+
+# Optional: path to nmap's script.db if it is not found next to the nmap binary.
+# nmap_script_db: /usr/share/nmap/scripts/script.db
