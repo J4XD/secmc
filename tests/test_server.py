@@ -7,7 +7,7 @@ from mcp.types import CallToolResult
 
 from secmcp import server
 from secmcp.config import Config
-from secmcp.tools import nmap
+from secmcp.tools import common
 from tests.helpers import make_ctx
 
 pytestmark = pytest.mark.anyio
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture(autouse=True)
 def _nmap_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(nmap, "find_binary", lambda name: "/usr/bin/nmap")
+    monkeypatch.setattr(common, "find_binary", lambda name: "/usr/bin/nmap")
 
 
 async def call(config: Config, tool: str, arguments: dict[str, Any]) -> Any:
