@@ -1,0 +1,5 @@
+Entry { filename = "broadcast-dhcp-discover.nse", categories = { "broadcast", "safe", } }
+Entry { filename = "http-title.nse", categories = { "default", "discovery", "safe", } }
+Entry { filename = "ssh-brute.nse", categories = { "brute", "intrusive", } }
+Entry { filename = "http-slowloris.nse", categories = { "dos", "intrusive", "vuln", } }
+Entry { filename = "ssl-cert.nse", categories = { "default", "discovery", "safe", } }
