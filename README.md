@@ -1,5 +1,7 @@
 # secmcp
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/j4xd-secmcp-d4w6sp?v=2fcc80132c5d66fab8409b85c0a15884)](https://m8ven.ai/mcp/j4xd-secmcp-d4w6sp?s=readme)
+
 secmcp is an MCP server that lets AI assistants run security tools for authorized
 penetration testing and bug bounty work. Every tool call is checked against a scope
 file and a per-tool flag policy before anything runs, and every call is audited.
